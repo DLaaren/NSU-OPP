@@ -1,2 +1,2 @@
 # OPP_labs
-bruh..
+do not use lab2, there are mistakes that must be fixed!!
