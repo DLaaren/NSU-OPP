@@ -1,11 +1,10 @@
-
 #include <iostream>
 #include <cmath>
 #include <climits>
 #include <stdlib.h>
 #include <mpi.h>
 
-#define N 8
+#define N 1200
 #define EPSILON 0.00001 //10^(-5)
 #define PARAMETER 0.01
 
@@ -45,7 +44,7 @@ void sub(const double *M1, const double *M2, double *resM, int size) {
     }
 }
 
-double preEuclideanNorm(const double *M, int size) {
+double preEuclideanNorm(const double* M, int size) {
     double norm = 0;
     for (int i = 0; i < size; i++) {
         norm += M[i]*M[i];
@@ -53,21 +52,22 @@ double preEuclideanNorm(const double *M, int size) {
     return norm;
 }
 
-void copyVector(const double *M1, double *M2) {
-    for (int i = 0; i < N; i++) {
+template <class T>
+void copyVector(const T* M1, T* M2, int size) {
+    for (int i = 0; i < size; i++) {
         M2[i] = M1[i];
     }
 }
 
-void printVector(double *vector) {
+void printVector(double* vector, int size) {
     printf("\n");
-    for (int i = 0; i < N; i++) {
+    for (int i = 0; i < size; i++) {
         printf("%lf ", vector[i]);
     }
     printf("\n");
 }
 
-void printMatrix(double *M, int columns, int rows) {
+void printMatrix(double* M, int columns, int rows) {
     printf("\n");
     for (int i = 0; i < columns; i++) {
         for (int j = 0; j < rows; j++) {
@@ -78,8 +78,32 @@ void printMatrix(double *M, int columns, int rows) {
     printf("\n");
 }
 
+void divideBetweenThreads(int* numberOfElementsVector, int* numberOfElementsMatrix, int* arrayOffsetsVector, int* arrayOffsetsMatrix, int sizeOfCluster) {
+    int reminder = N % sizeOfCluster;
+    int lastOffset = 0;
+    if (reminder != 0) {
+        for (int i = 0; i < reminder; i++) {
+            numberOfElementsVector[i] = 1;
+        }
+    }
+    for (int i = 0; i < sizeOfCluster; i++) {
+        numberOfElementsVector[i] += N / sizeOfCluster;
+        arrayOffsetsVector[i] = lastOffset;
+        lastOffset += numberOfElementsVector[i];
+    }
+
+    copyVector<int>(numberOfElementsVector, numberOfElementsMatrix, sizeOfCluster);
+
+    lastOffset = 0;
+    for (int i = 0; i < sizeOfCluster; i++) {
+        numberOfElementsMatrix[i] *= N;
+        arrayOffsetsMatrix[i] = lastOffset;
+        lastOffset += numberOfElementsMatrix[i];
+    }
+}
+
 int main() {
-    srand(time(NULL));
+    srand(123456);
 
     if (MPI_Init(NULL,NULL) != MPI_SUCCESS) {
         printf("Error ocurred while trying to initiate MPI\n");
@@ -89,21 +113,32 @@ int main() {
     MPI_Comm_size(MPI_COMM_WORLD, &sizeOfCluster);
     MPI_Comm_rank(MPI_COMM_WORLD, &processRank);
 
-    int numberOfColumnsPerThread = N / sizeOfCluster;
-    if (N % sizeOfCluster != 0) {
-        //what if N*N / sizeOfCluster has reminder???
+    int* numberOfElementsVector = (int*)calloc(sizeOfCluster, sizeof(int));
+    int* arrayOffsetsVector = (int*)calloc(sizeOfCluster, sizeof(int));
+    int* numberOfElementsMatrix = (int*)calloc(sizeOfCluster, sizeof(int));
+    int* arrayOffsetsMatrix = (int*)calloc(sizeOfCluster, sizeof(int));
+
+    if (processRank == 0) {
+        divideBetweenThreads(numberOfElementsVector, numberOfElementsMatrix, arrayOffsetsVector, arrayOffsetsMatrix, sizeOfCluster);
     }
 
-    double *A_buffer = (double*)malloc(sizeof(double) * N * numberOfColumnsPerThread);
-    double *Ax_buffer = (double*)malloc(sizeof(double) * N * numberOfColumnsPerThread);
-    double *b_buffer = (double*)malloc(sizeof(double) * numberOfColumnsPerThread);
+    MPI_Bcast(numberOfElementsVector, sizeOfCluster, MPI_DOUBLE, 0, MPI_COMM_WORLD);
+    MPI_Bcast(arrayOffsetsVector, sizeOfCluster, MPI_DOUBLE, 0, MPI_COMM_WORLD);
+    MPI_Bcast(numberOfElementsMatrix, sizeOfCluster, MPI_DOUBLE, 0, MPI_COMM_WORLD);
+    MPI_Bcast(arrayOffsetsMatrix, sizeOfCluster, MPI_DOUBLE, 0, MPI_COMM_WORLD);
+
+    int sizeOfBuffers = numberOfElementsVector[processRank];
+
+    double* A_buffer = (double*)malloc(sizeof(double) * N * sizeOfBuffers);
+    double* Ax_buffer = (double*)malloc(sizeof(double) * sizeOfBuffers);
+    double* b_buffer = (double*)malloc(sizeof(double) * sizeOfBuffers);
 
     //all threads:
-    double *A = NULL;
-    double *b = NULL;
-    double *prevX = (double*)malloc(sizeof(double) * N);
-    double *nextX = (double*)malloc(sizeof(double) * N);
-    double *Ax = (double*)malloc(sizeof(double) * N);
+    double* A;
+    double* b;
+    double* prevX = (double*)malloc(sizeof(double) * N);
+    double* nextX;
+    double* Ax;
     double norm_b;
     double norm_Ax;
     double tau = PARAMETER;
@@ -116,44 +151,42 @@ int main() {
         A = (double*)malloc(sizeof(double) * N * N);
         generateMatrix(A, N, N);
 
+        Ax = (double*)malloc(sizeof(double) * N);
+
         b = (double*)malloc(sizeof(double) * N);
         generateMatrix(b, N, 1);
 
+        nextX = (double*)malloc(sizeof(double) * N);
         generateMatrix(nextX, N, 1);
 
         norm_b = preEuclideanNorm(b, N);
         norm_b = sqrt(norm_b); // ||b||
     }
-
     MPI_Bcast(prevX, N, MPI_DOUBLE, 0, MPI_COMM_WORLD);
-
-    //divided the matrix A between all threads
-    //https://learn.microsoft.com/ru-ru/message-passing-interface/mpi-scatter-function
-    //there is a garantee that number i thread will get number i peace of vector "b"
-    MPI_Scatter(A, N * numberOfColumnsPerThread, MPI_DOUBLE, A_buffer, N * numberOfColumnsPerThread, MPI_DOUBLE, 0, MPI_COMM_WORLD);
-    MPI_Scatter(b, numberOfColumnsPerThread, MPI_DOUBLE, b_buffer, numberOfColumnsPerThread, MPI_DOUBLE, 0, MPI_COMM_WORLD);
+    MPI_Scatterv(b, numberOfElementsVector, arrayOffsetsVector, MPI_DOUBLE, b_buffer, sizeOfBuffers, MPI_DOUBLE, 0, MPI_COMM_WORLD);
+    MPI_Scatterv(A, numberOfElementsMatrix, arrayOffsetsMatrix, MPI_DOUBLE, A_buffer, N * sizeOfBuffers, MPI_DOUBLE, 0, MPI_COMM_WORLD);
 
     double start = MPI_Wtime();
     while (result > EPSILON) {
 
         if (processRank == 0) {
-            copyVector(nextX, prevX);
+            copyVector<double>(nextX, prevX, N);
         }
-
+        
         MPI_Bcast(prevX, N, MPI_DOUBLE, 0, MPI_COMM_WORLD);
 
-        mul(A_buffer, prevX, Ax_buffer, numberOfColumnsPerThread); // Ax_buf = A_buf * prevX; 
+        mul(A_buffer, prevX, Ax_buffer, sizeOfBuffers); // Ax_buf = A_buf * prevX; 
 
-        sub(Ax_buffer, b_buffer, Ax_buffer, numberOfColumnsPerThread); // Ax_buf - b_buf
+        sub(Ax_buffer, b_buffer, Ax_buffer, sizeOfBuffers); // Ax_buf - b_buf
 
-        double preNorm_Ax = preEuclideanNorm(Ax_buffer, numberOfColumnsPerThread); // (Ax_buf - b_buf)^2
+        double preNorm_Ax = preEuclideanNorm(Ax_buffer, sizeOfBuffers); // (Ax_buf - b_buf)^2
 
         MPI_Reduce(&preNorm_Ax, &norm_Ax, 1, MPI_DOUBLE, MPI_SUM, 0, MPI_COMM_WORLD); //adding all prenorms in the root
 
-        scalMult(Ax_buffer, tau, numberOfColumnsPerThread); // tau * (Ax_buf - b_buf)
-
-        MPI_Gather(Ax_buffer, numberOfColumnsPerThread, MPI_DOUBLE, Ax, numberOfColumnsPerThread, MPI_DOUBLE, 0, MPI_COMM_WORLD);
-
+        scalMult(Ax_buffer, tau, sizeOfBuffers); // tau * (Ax_buf - b_buf)
+        
+        MPI_Gatherv(Ax_buffer, sizeOfBuffers, MPI_DOUBLE, Ax, numberOfElementsVector, arrayOffsetsVector, MPI_DOUBLE, 0, MPI_COMM_WORLD);
+        
         if (processRank == 0) {
             sub(prevX, Ax, nextX, N); // prevX - tau * (Ax - b) = nextX
 
@@ -179,13 +212,26 @@ int main() {
     double end = MPI_Wtime();
 
     printf("time: %lf\n", end - start);
-    //printVector(nextX);
+    if (processRank == 0) {
+        printVector(nextX, 10);
+        //printMatrix(A, N, N);
+        printf("\n");
+    }
 
-    free(A);
-    free(b);
+    if (processRank == 0) {
+        free(A);
+        free(b);
+        free(Ax);
+        free(nextX);
+    }
+    free(numberOfElementsVector);
+    free(numberOfElementsMatrix);
+    free(arrayOffsetsVector);
+    free(arrayOffsetsMatrix);
+    free(A_buffer);
+    free(Ax_buffer);
+    free(b_buffer);
     free(prevX);
-    free(Ax);
-    free(nextX);
 
     if (MPI_Finalize() != MPI_SUCCESS) {
         printf("Error ocurred while trying to close MPI\n");
