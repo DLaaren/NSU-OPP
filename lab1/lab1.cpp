@@ -4,7 +4,7 @@
 #include <stdlib.h>
 #include <mpi.h>
 
-#define N 1200
+#define N 50
 #define EPSILON 0.00001 //10^(-5)
 #define PARAMETER 0.01
 
@@ -103,7 +103,7 @@ void divideBetweenThreads(int* numberOfElementsVector, int* numberOfElementsMatr
 }
 
 int main() {
-    srand(123456);
+    srand(12345);
 
     if (MPI_Init(NULL,NULL) != MPI_SUCCESS) {
         printf("Error ocurred while trying to initiate MPI\n");
@@ -118,14 +118,7 @@ int main() {
     int* numberOfElementsMatrix = (int*)calloc(sizeOfCluster, sizeof(int));
     int* arrayOffsetsMatrix = (int*)calloc(sizeOfCluster, sizeof(int));
 
-    if (processRank == 0) {
-        divideBetweenThreads(numberOfElementsVector, numberOfElementsMatrix, arrayOffsetsVector, arrayOffsetsMatrix, sizeOfCluster);
-    }
-
-    MPI_Bcast(numberOfElementsVector, sizeOfCluster, MPI_DOUBLE, 0, MPI_COMM_WORLD);
-    MPI_Bcast(arrayOffsetsVector, sizeOfCluster, MPI_DOUBLE, 0, MPI_COMM_WORLD);
-    MPI_Bcast(numberOfElementsMatrix, sizeOfCluster, MPI_DOUBLE, 0, MPI_COMM_WORLD);
-    MPI_Bcast(arrayOffsetsMatrix, sizeOfCluster, MPI_DOUBLE, 0, MPI_COMM_WORLD);
+    divideBetweenThreads(numberOfElementsVector, numberOfElementsMatrix, arrayOffsetsVector, arrayOffsetsMatrix, sizeOfCluster);
 
     int sizeOfBuffers = numberOfElementsVector[processRank];
 
@@ -212,11 +205,6 @@ int main() {
     double end = MPI_Wtime();
 
     printf("time: %lf\n", end - start);
-    if (processRank == 0) {
-        printVector(nextX, 10);
-        //printMatrix(A, N, N);
-        printf("\n");
-    }
 
     if (processRank == 0) {
         free(A);
