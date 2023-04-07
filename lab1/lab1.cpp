@@ -108,7 +108,7 @@ int main() {
     srand(12345);
 
     if (MPI_Init(NULL,NULL) != MPI_SUCCESS) {
-        printf("Error ocurred while trying to initiate MPI\n");
+        perror("Error ocurred while trying to initiate MPI\n");
         exit(EXIT_FAILURE);
     }
     int processRank, sizeOfCluster;
@@ -144,7 +144,7 @@ int main() {
     //main thread:
     if (processRank == 0) {
         A = (float*)malloc(sizeof(float) * N * N);
-        //if you do nit use tests
+        //if you do not use tests
         //generateMatrix(A, N, N);
         FILE* Abin = fopen("matA.bin", "r");
         if (Abin == NULL) {
@@ -263,6 +263,19 @@ int main() {
         fclose(Xbin);
 
         FILE* resultX = fopen("result.bin", "w");
+        if (resultX == NULL) {
+            perror("fopen()");
+            free(numberOfElementsVector);
+            free(arrayOffsetsVector);
+            free(numberOfElementsMatrix);
+            free(arrayOffsetsMatrix);
+            free(A_buffer);
+            free(Ax_buffer);
+            free(b_buffer);
+            free(prevX);
+            free(answerX);
+            return -1;
+        }
         fwrite(nextX, 4, N, resultX);
         fclose(resultX);
     }
@@ -285,7 +298,7 @@ int main() {
     free(prevX);
 
     if (MPI_Finalize() != MPI_SUCCESS) {
-        printf("Error ocurred while trying to close MPI\n");
+        perror("Error ocurred while trying to close MPI\n");
         exit(EXIT_FAILURE);
     }
     return 0;
