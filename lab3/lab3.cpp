@@ -56,8 +56,8 @@ bool testMultiplication(T* M1, T* M2, size_t size) {
 #define N 8
 #define M 8
 #define K 8
-#define CLUSTER_X 2
-#define CLUSTER_Y 2
+#define CLUSTER_X 4
+#define CLUSTER_Y 1
 #define NDIMS 2 //Number of dimensions of grid.
 
 static MPI_Comm gridComm;
@@ -75,7 +75,7 @@ bool createGridComm() {
 
     //create new communicators
     int numberProcessesPerDim[NDIMS] = {CLUSTER_X, CLUSTER_Y}; //Integer array of size ndims specifying the number of processes in each dimension.
-    int periods[NDIMS] = {0, 0}; //Logical array of size ndims specifying whether the grid is periodic (true) or not (false) in each dimension.
+    int periods[NDIMS] = {1, 1}; //Logical array of size ndims specifying whether the grid is periodic (true) or not (false) in each dimension.
 
     //Makes a new communicator
     MPI_Cart_create(MPI_COMM_WORLD, NDIMS, numberProcessesPerDim, periods, 0, &gridComm);
@@ -85,7 +85,6 @@ bool createGridComm() {
     //The i-th entry of remain_dims specifies whether the i-th dimension is kept in the subgrid (true) or is dropped (false).
     int remain_dimRows[NDIMS] = {1, 0};
     int remain_dimColumns[NDIMS] = {0, 1};
-    //create subgrids
     MPI_Cart_sub(gridComm, remain_dimRows, &rowsComm);
     MPI_Cart_sub(gridComm, remain_dimColumns, &columnsComm);
 
@@ -94,30 +93,19 @@ bool createGridComm() {
 
 void sendData(double* matrix_A, double* matrix_B, double* block_A, double* block_B, size_t blockSize_A, size_t blockSize_B) {
     //divide rows
-    MPI_Scatter(matrix_A, blockSize_A * M, MPI_DOUBLE, block_A, blockSize_A * M, MPI_DOUBLE, 0, rowsComm);
+    //printf("rank %d, %d %d\n\n", processRank, gridCoords[0], gridCoords[1]);
+    if (gridCoords[1] == 0) MPI_Scatter(matrix_A, blockSize_A * M, MPI_DOUBLE, block_A, blockSize_A * M, MPI_DOUBLE, 0, rowsComm);
     MPI_Bcast(block_A, blockSize_A * M, MPI_DOUBLE, 0, columnsComm);
-    /*if (processRank == 1) {
-        printf("block A\n");
-        printMatrix(block_A, N / CLUSTER_X, M);
-    }*/
 
     //divide columns
     MPI_Datatype columnType, columnTypeResized;
-    //Defines a new data type that consists of a specified number of blocks of a specified size.
-    //Each block is a concatenation of the same number of elements of an existing data type.
     MPI_Type_vector(M, blockSize_B, K, MPI_DOUBLE, &columnType);
-    //https://www.open-mpi.org/doc/v3.1/man3/MPI_Type_commit.3.php
     MPI_Type_commit(&columnType);
-    //https://rookiehpc.org/mpi/docs/mpi_type_create_resized/index.html
     MPI_Type_create_resized(columnType, 0, blockSize_B * sizeof(double), &columnTypeResized);
     MPI_Type_commit(&columnTypeResized);
 
-    MPI_Scatter(matrix_B, 1, columnTypeResized, block_B, blockSize_B * M, MPI_DOUBLE, 0, columnsComm);
+    if (gridCoords[0] == 0) MPI_Scatter(matrix_B, 1, columnTypeResized, block_B, blockSize_B * M, MPI_DOUBLE, 0, columnsComm);
     MPI_Bcast(block_B, blockSize_B * M, MPI_DOUBLE, 0, rowsComm);
-    /*if (processRank == 2) {
-        printf("block B\n");
-        printMatrix(block_B, M, K / CLUSTER_X);
-    }*/
 }
 
 void collectData(double* block_C, size_t blockSize_C, double* matrix_C, size_t blockSize_A, size_t blockSize_B) {
@@ -134,7 +122,7 @@ void collectData(double* block_C, size_t blockSize_C, double* matrix_C, size_t b
     int offset = 0;
     for (size_t blockCount = 0; blockCount < CLUSTER_X * CLUSTER_Y; blockCount++) {
         if (blockCount % CLUSTER_Y == 0 && blockCount != 0) {
-            offset += CLUSTER_X * CLUSTER_Y - 1;
+            offset += blockSize_A * CLUSTER_Y - (CLUSTER_Y - 1);
         } else if (blockCount != 0) {
             offset += 1;
         }
@@ -142,21 +130,6 @@ void collectData(double* block_C, size_t blockSize_C, double* matrix_C, size_t b
         displs[blockCount] = offset;
         if (processRank == 0) printf("offset %d\n", offset);
     }
-
-    /*int offset = 0, numCount = 0;
-    int j = 0; //number of the process
-    int written;
-    while (numCount < CLUSTER_X * CLUSTER_Y * blockSize_C) {
-        written = 0;
-        for (size_t i = 0; i < K; i += blockSize_B, j++) {
-            recvcounts[j] = 1;
-            displs[j] = offset;
-            offset++;
-            written++;
-        }
-        numCount += written * blockSize_C;
-        offset += written * (blockSize_A - 1);
-    }*/
 
     MPI_Gatherv(block_C, blockSize_C, MPI_DOUBLE, matrix_C, recvcounts, displs, recvBlockTypeResized, 0, MPI_COMM_WORLD);
     free(recvcounts);
@@ -183,7 +156,6 @@ int main() {
         }
         exit(EXIT_FAILURE);
     }
-    printf("gridComm has been created successful\n");
 
     if (processRank == 0) {
         matrix_A = (double*)malloc(N*M * sizeof(double));
@@ -193,7 +165,6 @@ int main() {
         generateMatrix(matrix_B, M, K);
     }
     
-
     //create block for each proccess
     size_t blockSize_A = (N / CLUSTER_X);
     size_t blockSize_B = (K / CLUSTER_Y);
@@ -201,13 +172,6 @@ int main() {
     double* block_A = (double*)malloc(blockSize_A * M * sizeof(double));
     double* block_B = (double*)malloc(blockSize_B * M * sizeof(double));
     double* block_C = (double*)calloc(blockSize_C, sizeof(double));
-
-    /*if (processRank == 0) {
-        printf("Matrix B\n");
-        printMatrix(matrix_B, M, K);
-    }*/
-
-    printf("all initialisation was successful!\n");
 
     double start = MPI_Wtime();
 
@@ -222,21 +186,15 @@ int main() {
     if (processRank == 0) {
         double* matrix_tmp = (double*)calloc(N * K, sizeof(double));
         simpleMultiplication<double>(matrix_A, matrix_B, matrix_tmp, N, M, K);
-        /*printf("matrix A\n");
-        printMatrix(matrix_A, N, M);
-        printf("matrix B\n");
-        printMatrix(matrix_B, M, K);*/
 
         if (testMultiplication<double>(matrix_C, matrix_tmp, N * K) == false) {
             printf("wrong parallel multiplication!\n");
         } else {
             printf("Time: %lf s\n", end - start);
         }
-        printf("wanted result:\n");
-        printMatrix(matrix_tmp, N, K);
-        printf("\n");
-        printf("result:\n");
-        printMatrix(matrix_C, N, K);
+        //printMatrix(matrix_tmp, N, K);
+        //printf("\n\n");
+        //printMatrix(matrix_C, N, K);
         free(matrix_tmp);
     }
 
