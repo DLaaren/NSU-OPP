@@ -50,14 +50,13 @@ bool testMultiplication(T* M1, T* M2, size_t size) {
     |
     +
     X
-
 */
 
-#define N 8
-#define M 8
-#define K 8
+#define N 80
+#define M 80
+#define K 80
 #define CLUSTER_X 4
-#define CLUSTER_Y 1
+#define CLUSTER_Y 2
 #define NDIMS 2 //Number of dimensions of grid.
 
 static MPI_Comm gridComm;
@@ -93,7 +92,6 @@ bool createGridComm() {
 
 void sendData(double* matrix_A, double* matrix_B, double* block_A, double* block_B, size_t blockSize_A, size_t blockSize_B) {
     //divide rows
-    //printf("rank %d, %d %d\n\n", processRank, gridCoords[0], gridCoords[1]);
     if (gridCoords[1] == 0) MPI_Scatter(matrix_A, blockSize_A * M, MPI_DOUBLE, block_A, blockSize_A * M, MPI_DOUBLE, 0, rowsComm);
     MPI_Bcast(block_A, blockSize_A * M, MPI_DOUBLE, 0, columnsComm);
 
@@ -116,8 +114,8 @@ void collectData(double* block_C, size_t blockSize_C, double* matrix_C, size_t b
     MPI_Type_create_resized(recvBlockType, 0, blockSize_B * sizeof(double), &recvBlockTypeResized);
     MPI_Type_commit(&recvBlockTypeResized);
 
-    int* recvcounts = (int*)malloc(CLUSTER_X * CLUSTER_Y); //The number of elements that is received from each process.
-    int* displs = (int*)malloc(CLUSTER_X * CLUSTER_Y); //The location, relative to the recvbuf parameter, of the data from each communicator process. 
+    int* recvcounts = (int*)malloc(CLUSTER_X * CLUSTER_Y * sizeof(int)); //The number of elements that is received from each process.
+    int* displs = (int*)malloc(CLUSTER_X * CLUSTER_Y * sizeof(int)); //The location, relative to the recvbuf parameter, of the data from each communicator process. 
     
     int offset = 0;
     for (size_t blockCount = 0; blockCount < CLUSTER_X * CLUSTER_Y; blockCount++) {
@@ -128,7 +126,6 @@ void collectData(double* block_C, size_t blockSize_C, double* matrix_C, size_t b
         }
         recvcounts[blockCount] = 1;
         displs[blockCount] = offset;
-        if (processRank == 0) printf("offset %d\n", offset);
     }
 
     MPI_Gatherv(block_C, blockSize_C, MPI_DOUBLE, matrix_C, recvcounts, displs, recvBlockTypeResized, 0, MPI_COMM_WORLD);
