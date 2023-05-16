@@ -43,6 +43,18 @@ double fi_function(double x, double y, double z) {
     return x*x + y*y + z*z;
 }
 
+void printOmega(double* A){
+    for (int i = 0; i < N; i++) {
+        for (int j = 0; j < N; j++) {
+            for (int k = 0; k < N; k++) {
+                printf(" %7.4f", A[point(i,j,k)]);
+            }
+            cout << ";";
+        }
+        cout << endl;
+    }
+}
+
 double delta(double* omega){
     auto delta = DBL_MIN;
     double x, y, z;
@@ -90,6 +102,8 @@ void init_fi_function(int layerSize, double* currLayer) {
     }
 }
 
+
+//шаг 3 :: обновляем значение функции фи
 double updateLayer(int relative_Z_coord, int layerIndex, double* currLayer, double* currLayerBuf) {
     double x, y, z;
     int absolute_Z_coord = relative_Z_coord + layerIndex;
@@ -128,6 +142,34 @@ double updateLayer(int relative_Z_coord, int layerIndex, double* currLayer, doub
     return delta;
 }
 
+int waitForIrecv(MPI_Request* req) {
+    int finishedReq = -1;
+    int isAllReqCompleted = 1;
+
+    if (commSize == 1) return -1;
+
+    MPI_Testall(4, req, &isAllReqCompleted, MPI_STATUS_IGNORE);
+    if (!isAllReqCompleted) {
+        if (processRank == 0) {
+            MPI_Wait(&req[1], MPI_STATUS_IGNORE);
+            return -1;
+        }
+        if (processRank == commSize-1) {
+            MPI_Wait(&req[0], MPI_STATUS_IGNORE);
+            return -1;
+        }
+        if (processRank != 0 && processRank != commSize - 1) {
+            MPI_Waitany(4, req, &finishedReq, MPI_STATUS_IGNORE);   
+            if (finishedReq == 2 || finishedReq == 3) {
+                finishedReq = waitForIrecv(req);
+            }
+        }
+    }
+
+    return finishedReq;
+}
+
+
 int main() {
     MPI_Init(nullptr, nullptr);
     MPI_Comm_size(MPI_COMM_WORLD, &commSize);
@@ -146,7 +188,6 @@ int main() {
     int layerVolume = (layerSize + 2) * N * N;
     double* currLayer = new double[layerVolume];
     double* currLayerBuf = new double[layerVolume];
-
     MPI_Request req[4];
 
     double start = MPI_Wtime();
@@ -156,14 +197,14 @@ int main() {
         //send and receive in background
         if (processRank != 0) {
             //lower border parts
-            MPI_Isend(currLayerBuf + N*N, N*N, MPI_DOUBLE, processRank - 1, 123, MPI_COMM_WORLD, &req[0]);
-            MPI_Irecv(currLayerBuf, N*N, MPI_DOUBLE, processRank - 1, 123, MPI_COMM_WORLD, &req[1]);
+            MPI_Isend(currLayerBuf + N*N, N*N, MPI_DOUBLE, processRank - 1, 123, MPI_COMM_WORLD, &req[2]);
+            MPI_Irecv(currLayerBuf, N*N, MPI_DOUBLE, processRank - 1, 123, MPI_COMM_WORLD, &req[0]);
         }
 
         if (processRank != commSize - 1) {
             //upper border parts
-            MPI_Isend(currLayerBuf + N*N*layerSize, N*N, MPI_DOUBLE, processRank + 1, 123, MPI_COMM_WORLD, &req[2]);
-            MPI_Irecv(currLayerBuf + N*N*(layerSize+1), N*N, MPI_DOUBLE, processRank + 1, 123, MPI_COMM_WORLD, &req[3]);
+            MPI_Isend(currLayerBuf + N*N*layerSize, N*N, MPI_DOUBLE, processRank + 1, 123, MPI_COMM_WORLD, &req[3]);
+            MPI_Irecv(currLayerBuf + N*N*(layerSize+1), N*N, MPI_DOUBLE, processRank + 1, 123, MPI_COMM_WORLD, &req[1]);
         }
 
         auto localDelta = DBL_MIN;
@@ -176,32 +217,47 @@ int main() {
         }
 
         //wait for upper and lower parts
-        //MPI_Wait()
-        if (processRank != 0) {
-            MPI_Wait(&req[0], MPI_STATUS_IGNORE);
-            MPI_Wait(&req[1], MPI_STATUS_IGNORE);
-        }
+        int finishedReq = waitForIrecv(req);
+        //cout << finishedReq << endl;
 
-        if (processRank != commSize - 1) {
-            MPI_Wait(&req[2], MPI_STATUS_IGNORE);
-            MPI_Wait(&req[3], MPI_STATUS_IGNORE);
-        }
+        if (finishedReq == -1) {
+            tmpDelta = updateLayer(relative_Z_coord_forLayer, 1, currLayer, currLayerBuf);
+            localDelta = max(tmpDelta, localDelta);
+            tmpDelta = updateLayer(relative_Z_coord_forLayer, layerSize, currLayer, currLayerBuf);
+            localDelta = max(tmpDelta, localDelta);
+        } else {
+            if (finishedReq == 0) {
+                //got lower part firstly
+                //for Z_k = 1
+                tmpDelta = updateLayer(relative_Z_coord_forLayer, 1, currLayer, currLayerBuf);
+                localDelta = max(tmpDelta, localDelta);
 
-        //update received border parts
+                //then wait for the upper one
+                MPI_Wait(&req[1], MPI_STATUS_IGNORE);
+                
+                //for Z_k = layerSize;
+                tmpDelta = updateLayer(relative_Z_coord_forLayer, layerSize, currLayer, currLayerBuf);
+                localDelta = max(tmpDelta, localDelta);
 
-        //for Z_k = 1
-        tmpDelta = updateLayer(relative_Z_coord_forLayer, 1, currLayer, currLayerBuf);
-        localDelta = max(tmpDelta, localDelta);
+            } else if (finishedReq == 1) {
+                //got upper part firstly
+                //for Z_k = layerSize;
+                tmpDelta = updateLayer(relative_Z_coord_forLayer, layerSize, currLayer, currLayerBuf);
+                localDelta = max(tmpDelta, localDelta);
 
-        //for Z_k = layerSize;
-        tmpDelta = updateLayer(relative_Z_coord_forLayer, layerSize, currLayer, currLayerBuf);
-        localDelta = max(tmpDelta, localDelta);
+                //then wait for the lower one
+                MPI_Wait(&req[0], MPI_STATUS_IGNORE);
 
-        memcpy(currLayer, currLayerBuf, layerVolume * sizeof(double));
+                //for Z_k = 1
+                tmpDelta = updateLayer(relative_Z_coord_forLayer, 1, currLayer, currLayerBuf);
+                localDelta = max(tmpDelta, localDelta);
+            }
+        } 
+
+        std::memcpy(currLayer, currLayerBuf, layerVolume * sizeof(double));
 
         //gatherAll
         MPI_Allreduce(&localDelta, &globalDelta, 1, MPI_DOUBLE, MPI_MAX, MPI_COMM_WORLD);
-
     } while (globalDelta > epsilon);
 
     double* omega;
@@ -219,6 +275,7 @@ int main() {
     if (processRank == 0) {
         cout << "Time: " << end - start << "\n";
         cout << "Delta: " << delta(omega) << "\n";
+        //printOmega(omega);
         delete [] omega;
     }
 
