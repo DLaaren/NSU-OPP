@@ -226,8 +226,8 @@ int main() {
             tmpDelta = updateLayer(relative_Z_coord_forLayer, layerSize, currLayer, currLayerBuf);
             localDelta = max(tmpDelta, localDelta);
         } else {
+            //got lower part firstly
             if (finishedReq == 0) {
-                //got lower part firstly
                 //for Z_k = 1
                 tmpDelta = updateLayer(relative_Z_coord_forLayer, 1, currLayer, currLayerBuf);
                 localDelta = max(tmpDelta, localDelta);
@@ -239,8 +239,9 @@ int main() {
                 tmpDelta = updateLayer(relative_Z_coord_forLayer, layerSize, currLayer, currLayerBuf);
                 localDelta = max(tmpDelta, localDelta);
 
-            } else if (finishedReq == 1) {
-                //got upper part firstly
+            }
+            //got upper part firstly
+            else if (finishedReq == 1) {
                 //for Z_k = layerSize;
                 tmpDelta = updateLayer(relative_Z_coord_forLayer, layerSize, currLayer, currLayerBuf);
                 localDelta = max(tmpDelta, localDelta);
