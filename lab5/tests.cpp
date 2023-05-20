@@ -47,25 +47,28 @@ TEST(ThreadSafeStackTest, ThreadSafeStackTest_ConcurrentPushAndPop) {
 
 TEST(ThreadSafeStackTest, ThreadSafeStackTest_ConcurrentTop) {
     ThreadSafeStack<int> *stack = new ThreadSafeStack<int>();
-    stack->push(1);
-    stack->push(2);
 
     std::vector<std::thread> threads;
 
-    for (int i = 0; i < 1000; i++) {
-        threads.emplace_back( [stack]() {
-            EXPECT_TRUE(stack->top().value_or(-1) == 2);
-        });
+    for (int i = 0; i < 100; i++) {
+        threads.push_back(std::thread( [stack]() {
+            EXPECT_TRUE(stack->top_with_waiting().value_or(-1) == 5);
+        }));
     }
+
+    std::thread t1 = std::thread([stack]() {
+        std::this_thread::sleep_for(std::chrono::seconds(1));
+        stack->push(5);
+    });
 
     for (auto &t : threads) {
         t.join();
     }
+    t1.join();
 
-    EXPECT_EQ(2, stack->pop_with_waiting());
-    EXPECT_EQ(1, stack->pop_with_waiting());
-    EXPECT_EQ(-1, stack->pop_without_waiting().value_or(-1));
+    EXPECT_EQ(5, stack->top_with_waiting().value_or(-1));
 }
+
 
 TEST(ThreadSafeStackTest, ThreadSafeStackTest_Pop) {
     ThreadSafeStack<int> *stack = new ThreadSafeStack<int>();
